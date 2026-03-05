@@ -2,7 +2,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, sum, avg, min as spark_min, max as spark_max, count,
     when, month, year, desc, asc, upper, lower, trim, 
-    rank, row_number, expr
+    rank, row_number, expr, round
 )
 from pyspark.sql.window import Window
 from pyspark.sql.types import DoubleType, IntegerType
@@ -14,7 +14,7 @@ spark = SparkSession.builder \
     .config("spark.sql.shuffle.partitions", "8") \
     .getOrCreate()
 
-spark.sparkContext.setLogLevel("ERROR")
+spark.sparkContext.setLogLevel("FATAL")
 
 print("=" * 60)
 print("LECTURA DE DATOS")
@@ -78,7 +78,7 @@ print("\n" + "=" * 60)
 print("6. 5 PAÍSES QUE MÁS COMPRAN FUERA DE REINO UNIDO")
 print("=" * 60)
 non_uk_sales = df_with_revenue.filter(col("Country") != "United Kingdom") \
-    .groupBy("Country").agg(sum("Revenue").alias("TotalSales")) \
+    .groupBy("Country").agg(round(sum("Revenue"), 2).alias("TotalSales")) \
     .orderBy(desc("TotalSales")).limit(5)
 print("Top 5 países (sin UK):")
 non_uk_sales.show()
@@ -142,39 +142,39 @@ print("\n--- FILTRADO DE DATOS ---")
 df.filter(col("Country") == "Germany").show(5)
 
 print("\n--- ORDENAMIENTO ---")
-df_with_revenue.groupBy("InvoiceNo").agg(sum("Revenue").alias("Total")) \
-    .orderBy(desc("Total")).show(5)
+df_with_revenue.groupBy("InvoiceNo").agg(round(sum("Revenue"), 2).alias("Total")) \
+    .orderBy(desc("Total")).show(5, truncate=False)
 
 print("\n--- AGRUPACIÓN CON AGG ---")
 df.groupBy("Country").agg(
     count("InvoiceNo").alias("NumFacturas"),
     sum("Quantity").alias("CantidadTotal"),
-    avg("UnitPrice").alias("PrecioPromedio")
+    round(avg("UnitPrice"), 2).alias("PrecioPromedio")
 ).orderBy(desc("NumFacturas")).show(5)
 
 print("\n--- CREACIÓN DE COLUMNAS DERIVADAS ---")
 df_with_category = df.withColumn(
     "IsReturn", when(col("Quantity") < 0, "Yes").otherwise("No")
 ).withColumn(
-    "Revenue", col("Quantity") * col("UnitPrice")
+    "Revenue", round(col("Quantity") * col("UnitPrice"), 2)
 ).withColumn(
     "CountryUpper", upper(col("Country"))
 )
-df_with_category.select("InvoiceNo", "Description", "Quantity", "IsReturn", "Revenue", "CountryUpper").show(5)
+df_with_category.select("InvoiceNo", "Description", "Quantity", "IsReturn", "Revenue", "CountryUpper").show(5, truncate=False)
 
 print("\n--- UNIONES (JOINS) ---")
 invoices_df = df.select("InvoiceNo", "Country").distinct()
-revenue_df = df_with_revenue.groupBy("InvoiceNo").agg(sum("Revenue").alias("TotalRevenue"))
+revenue_df = df_with_revenue.groupBy("InvoiceNo").agg(round(sum("Revenue"), 2).alias("TotalRevenue"))
 joined_df = invoices_df.join(revenue_df, "InvoiceNo")
-joined_df.show(5)
+joined_df.show(5, truncate=False)
 
 print("\n--- FUNCIONES DE VENTANA (RANKING) ---")
 customer_ranking = df_with_revenue_clean.groupBy("CustomerID").agg(
-    sum("Revenue").alias("TotalSpent")
+    round(sum("Revenue"), 2).alias("TotalSpent")
 ).withColumn(
     "Rank", row_number().over(Window.orderBy(desc("TotalSpent")))
 ).orderBy("Rank")
-customer_ranking.show(10)
+customer_ranking.show(10, truncate=False)
 
 print("\n--- EXPORTACIÓN FINAL ---")
 customer_ranking.coalesce(1).write.csv("resultados/ranking_clientes.csv", header=True, mode="overwrite")
