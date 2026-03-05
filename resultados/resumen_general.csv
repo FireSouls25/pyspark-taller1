@@ -1,11 +1,11 @@
 Pregunta,Resultado
-1. Total Facturas,25900
+1. Total Registros,541909
 2. Clientes Unicos,4373
 3. Ingreso Total,"$9,747,747.93"
 4. Producto Mas Vendido,WORLD WAR 2 GLIDERS ASSTD DESIGNS (53847 unidades)
 5. Top Cliente,"Cliente 14646 ($279,489.02)"
 6. Top 5 Paises sin UK,"Netherlands, EIRE, Germany, France, Australia"
-7. Ticket Promedio,$376.36
-8. Productos por Factura,"Min: 1, Max: 1114, Prom: 20.92"
+7. Gasto Promedio Cliente,"$1,898.46"
+8. Cantidad por Transaccion,"Min: -80995, Max: 80995, Prom: 9.55"
 9. Mes con Mas Ventas,"11/2011 ($1,461,756.25)"
-10. Porcentaje Devoluciones,19.97%
+10. Porcentaje Devoluciones,1.96%

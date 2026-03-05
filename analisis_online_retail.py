@@ -2,7 +2,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, sum, avg, min as spark_min, max as spark_max, count,
     when, month, year, desc, asc, upper, lower, trim, 
-    rank, row_number, expr, round as spark_round, lit
+    rank, row_number, expr, round as spark_round, lit, to_date, substring
 )
 from pyspark.sql.window import Window
 from pyspark.sql.types import DoubleType, IntegerType
@@ -29,11 +29,11 @@ df_with_revenue_clean = df_with_revenue.filter(col("CustomerID") != 0)
 resultados = {}
 
 print("=" * 60)
-print("1. NÚMERO TOTAL DE FACTURAS")
+print("1. NÚMERO TOTAL DE REGISTROS")
 print("=" * 60)
-total_invoices = df.select("InvoiceNo").distinct().count()
-print(f"Total de facturas únicas: {total_invoices}")
-resultados["01_total_facturas"] = pd.DataFrame({"TotalFacturas": [total_invoices]})
+total_registros = df.count()
+print(f"Total de registros: {total_registros}")
+resultados["01_total_registros"] = pd.DataFrame({"TotalRegistros": [total_registros]})
 
 print("\n" + "=" * 60)
 print("2. NÚMERO DE CLIENTES ÚNICOS")
@@ -83,34 +83,31 @@ print(non_uk_sales.to_string(index=False))
 resultados["06_top_paises_sin_uk"] = non_uk_sales
 
 print("\n" + "=" * 60)
-print("7. TICKET PROMEDIO POR FACTURA")
+print("7. PROMEDIO DE GASTO POR CLIENTE")
 print("=" * 60)
-invoice_totals = df_with_revenue.groupBy("InvoiceNo").agg(
-    spark_round(sum("Revenue"), 2).alias("InvoiceTotal")
-)
-avg_invoice = invoice_totals.select(avg("InvoiceTotal")).collect()[0][0]
-print(f"Ticket promedio por factura: ${avg_invoice:,.2f}")
-resultados["07_ticket_promedio"] = pd.DataFrame({"TicketPromedio": [round(float(avg_invoice), 2)]})
+avg_customer_spend = df_with_revenue_clean.groupBy("CustomerID").agg(sum("Revenue").alias("TotalSpent"))
+avg_spend = avg_customer_spend.select(avg("TotalSpent")).collect()[0][0]
+print(f"Gasto promedio por cliente: ${avg_spend:,.2f}")
+resultados["07_gasto_promedio_cliente"] = pd.DataFrame({"GastoPromedio": [round(float(avg_spend), 2)]})
 
 print("\n" + "=" * 60)
-print("8. MÍNIMO, MÁXIMO Y PROMEDIO DE PRODUCTOS POR FACTURA")
+print("8. MÍNIMO, MÁXIMO Y PROMEDIO DE CANTIDAD POR TRANSACCIÓN")
 print("=" * 60)
-products_per_invoice = df.groupBy("InvoiceNo").agg(count("Quantity").alias("ProductCount"))
-min_products = products_per_invoice.select(spark_min("ProductCount")).collect()[0][0]
-max_products = products_per_invoice.select(spark_max("ProductCount")).collect()[0][0]
-avg_products = products_per_invoice.select(avg("ProductCount")).collect()[0][0]
-print(f"Mínimo: {min_products}, Máximo: {max_products}, Promedio: {avg_products:.2f}")
-resultados["08_productos_por_factura"] = pd.DataFrame({
-    "Minimo": [min_products],
-    "Maximo": [max_products],
-    "Promedio": [round(float(avg_products), 2)]
+min_qty = df.select(spark_min("Quantity")).collect()[0][0]
+max_qty = df.select(spark_max("Quantity")).collect()[0][0]
+avg_qty = df.select(avg("Quantity")).collect()[0][0]
+print(f"Mínimo: {min_qty}, Máximo: {max_qty}, Promedio: {avg_qty:.2f}")
+resultados["08_cantidad_transaccion"] = pd.DataFrame({
+    "Minimo": [min_qty],
+    "Maximo": [max_qty],
+    "Promedio": [round(float(avg_qty), 2)]
 })
 
 print("\n" + "=" * 60)
 print("9. MES DEL AÑO CON MÁS VENTAS")
 print("=" * 60)
-df_with_date = df_with_revenue.withColumn("InvoiceDate", col("InvoiceDate"))
-df_with_month = df_with_date.withColumn("Month", month("InvoiceDate"))
+df_with_date = df_with_revenue.withColumn("InvoiceDate", to_date(col("InvoiceDate"), "M/d/yyyy H:mm"))
+df_with_month = df_with_date.filter(col("InvoiceDate").isNotNull()).withColumn("Month", month("InvoiceDate"))
 df_with_year = df_with_month.withColumn("Year", year("InvoiceDate"))
 monthly_sales = df_with_year.groupBy("Year", "Month").agg(sum("Revenue").alias("TotalSales")) \
     .orderBy(desc("TotalSales"))
@@ -124,16 +121,16 @@ resultados["09_ventas_por_mes"] = pd.DataFrame({
 })
 
 print("\n" + "=" * 60)
-print("10. PORCENTAJE DE FACTURAS CON DEVOLUCIONES")
+print("10. PORCENTAJE DE REGISTROS CON DEVOLUCIONES")
 print("=" * 60)
-total_inv = df.select("InvoiceNo").distinct().count()
-invoices_with_returns = df.filter(col("Quantity") < 0).select("InvoiceNo").distinct().count()
-percentage_returns = (invoices_with_returns / total_inv) * 100
-print(f"Facturas con devoluciones: {invoices_with_returns}")
+total_reg = df.count()
+reg_with_returns = df.filter(col("Quantity") < 0).count()
+percentage_returns = (reg_with_returns / total_reg) * 100
+print(f"Registros con devoluciones: {reg_with_returns}")
 print(f"Porcentaje: {percentage_returns:.2f}%")
 resultados["10_porcentaje_devoluciones"] = pd.DataFrame({
-    "TotalFacturas": [total_inv],
-    "FacturasDevolucion": [invoices_with_returns],
+    "TotalRegistros": [total_reg],
+    "RegistrosDevolucion": [reg_with_returns],
     "Porcentaje": [round(float(percentage_returns), 2)]
 })
 
@@ -150,26 +147,26 @@ for filename, df_result in resultados.items():
 
 resumen_data = {
     "Pregunta": [
-        "1. Total Facturas",
+        "1. Total Registros",
         "2. Clientes Unicos",
         "3. Ingreso Total",
         "4. Producto Mas Vendido",
         "5. Top Cliente",
         "6. Top 5 Paises sin UK",
-        "7. Ticket Promedio",
-        "8. Productos por Factura",
+        "7. Gasto Promedio Cliente",
+        "8. Cantidad por Transaccion",
         "9. Mes con Mas Ventas",
         "10. Porcentaje Devoluciones"
     ],
     "Resultado": [
-        str(total_invoices),
+        str(total_registros),
         str(unique_customers),
         f"${total_revenue:,.2f}",
         f"{top_product['Description']} ({top_product['TotalQuantity']} unidades)",
         f"Cliente {int(top_customer['CustomerID'])} (${top_customer['TotalSpent']:,.2f})",
         "Netherlands, EIRE, Germany, France, Australia",
-        f"${avg_invoice:,.2f}",
-        f"Min: {min_products}, Max: {max_products}, Prom: {avg_products:.2f}",
+        f"${avg_spend:,.2f}",
+        f"Min: {min_qty}, Max: {max_qty}, Prom: {avg_qty:.2f}",
         f"{top_month['Month']}/{top_month['Year']} (${top_month['TotalSales']:,.2f})",
         f"{percentage_returns:.2f}%"
     ]
