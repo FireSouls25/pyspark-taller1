@@ -2,7 +2,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, sum, avg, min as spark_min, max as spark_max, count,
     when, month, year, desc, asc, upper, lower, trim, 
-    rank, row_number, expr, round
+    rank, row_number, expr, round as spark_round, lit
 )
 from pyspark.sql.window import Window
 from pyspark.sql.types import DoubleType, IntegerType
@@ -16,42 +16,38 @@ spark = SparkSession.builder \
 
 spark.sparkContext.setLogLevel("FATAL")
 
-print("=" * 60)
-print("LECTURA DE DATOS")
-print("=" * 60)
-
 pandas_df = pd.read_excel("online+retail/Online Retail.xlsx")
 pandas_df['CustomerID'] = pandas_df['CustomerID'].fillna(0)
 df = spark.createDataFrame(pandas_df)
 
-print(f"Total de registros: {df.count()}")
-print("Esquema del DataFrame:")
-df.printSchema()
-
 df = df.withColumn("Quantity", col("Quantity").cast(IntegerType()))
 df = df.withColumn("UnitPrice", col("UnitPrice").cast(DoubleType()))
 
-print("\n" + "=" * 60)
+df_with_revenue = df.withColumn("Revenue", spark_round(col("Quantity") * col("UnitPrice"), 2))
+df_with_revenue_clean = df_with_revenue.filter(col("CustomerID") != 0)
+
+resultados = {}
+
+print("=" * 60)
 print("1. NÚMERO TOTAL DE FACTURAS")
 print("=" * 60)
 total_invoices = df.select("InvoiceNo").distinct().count()
 print(f"Total de facturas únicas: {total_invoices}")
-df.select("InvoiceNo").distinct().coalesce(1).write.csv("resultados/01_total_facturas.csv", header=True, mode="overwrite")
+resultados["01_total_facturas"] = pd.DataFrame({"TotalFacturas": [total_invoices]})
 
 print("\n" + "=" * 60)
 print("2. NÚMERO DE CLIENTES ÚNICOS")
 print("=" * 60)
 unique_customers = df.select("CustomerID").distinct().count()
 print(f"Total de clientes únicos: {unique_customers}")
-df.select("CustomerID").distinct().coalesce(1).write.csv("resultados/02_clientes_unicos.csv", header=True, mode="overwrite")
+resultados["02_clientes_unicos"] = pd.DataFrame({"TotalClientes": [unique_customers]})
 
 print("\n" + "=" * 60)
-print("3. INGRESO TOTAL (Quantity * UnitPrice)")
+print("3. INGRESO TOTAL")
 print("=" * 60)
-df_with_revenue = df.withColumn("Revenue", col("Quantity") * col("UnitPrice"))
 total_revenue = df_with_revenue.select(sum("Revenue")).collect()[0][0]
 print(f"Ingreso total: ${total_revenue:,.2f}")
-df_with_revenue.select(sum("Revenue")).coalesce(1).write.csv("resultados/03_ingreso_total.csv", header=True, mode="overwrite")
+resultados["03_ingreso_total"] = pd.DataFrame({"IngresoTotal": [round(float(total_revenue), 2)]})
 
 print("\n" + "=" * 60)
 print("4. PRODUCTO MÁS VENDIDO EN CANTIDAD")
@@ -60,39 +56,41 @@ top_product = df.groupBy("Description").agg(sum("Quantity").alias("TotalQuantity
     .orderBy(desc("TotalQuantity")).first()
 print(f"Producto más vendido: {top_product['Description']}")
 print(f"Cantidad total: {top_product['TotalQuantity']}")
-df.groupBy("Description").agg(sum("Quantity").alias("TotalQuantity")) \
-    .orderBy(desc("TotalQuantity")).coalesce(1).write.csv("resultados/04_productos_mas_vendidos.csv", header=True, mode="overwrite")
+resultados["04_producto_mas_vendido"] = pd.DataFrame({
+    "Producto": [top_product['Description']],
+    "CantidadTotal": [top_product['TotalQuantity']]
+})
 
 print("\n" + "=" * 60)
 print("5. CLIENTE CON MAYOR VOLUMEN DE COMPRA")
 print("=" * 60)
-df_with_revenue_clean = df_with_revenue.filter(col("CustomerID") != 0)
 top_customer = df_with_revenue_clean.groupBy("CustomerID").agg(sum("Revenue").alias("TotalSpent")) \
     .orderBy(desc("TotalSpent")).first()
 print(f"Cliente con mayor volumen: {int(top_customer['CustomerID'])}")
 print(f"Monto total: ${top_customer['TotalSpent']:,.2f}")
-df_with_revenue_clean.groupBy("CustomerID").agg(sum("Revenue").alias("TotalSpent")) \
-    .orderBy(desc("TotalSpent")).coalesce(1).write.csv("resultados/05_top_clientes_gasto.csv", header=True, mode="overwrite")
+resultados["05_top_cliente"] = pd.DataFrame({
+    "CustomerID": [int(top_customer['CustomerID'])],
+    "TotalSpent": [round(float(top_customer['TotalSpent']), 2)]
+})
 
 print("\n" + "=" * 60)
 print("6. 5 PAÍSES QUE MÁS COMPRAN FUERA DE REINO UNIDO")
 print("=" * 60)
 non_uk_sales = df_with_revenue.filter(col("Country") != "United Kingdom") \
-    .groupBy("Country").agg(round(sum("Revenue"), 2).alias("TotalSales")) \
-    .orderBy(desc("TotalSales")).limit(5)
-print("Top 5 países (sin UK):")
-non_uk_sales.show()
-non_uk_sales.coalesce(1).write.csv("resultados/06_top_paises_sin_uk.csv", header=True, mode="overwrite")
+    .groupBy("Country").agg(spark_round(sum("Revenue"), 2).alias("TotalSales")) \
+    .orderBy(desc("TotalSales")).limit(5).toPandas()
+print(non_uk_sales.to_string(index=False))
+resultados["06_top_paises_sin_uk"] = non_uk_sales
 
 print("\n" + "=" * 60)
 print("7. TICKET PROMEDIO POR FACTURA")
 print("=" * 60)
 invoice_totals = df_with_revenue.groupBy("InvoiceNo").agg(
-    sum("Revenue").alias("InvoiceTotal")
+    spark_round(sum("Revenue"), 2).alias("InvoiceTotal")
 )
 avg_invoice = invoice_totals.select(avg("InvoiceTotal")).collect()[0][0]
 print(f"Ticket promedio por factura: ${avg_invoice:,.2f}")
-invoice_totals.coalesce(1).write.csv("resultados/07_ticket_promedio.csv", header=True, mode="overwrite")
+resultados["07_ticket_promedio"] = pd.DataFrame({"TicketPromedio": [round(float(avg_invoice), 2)]})
 
 print("\n" + "=" * 60)
 print("8. MÍNIMO, MÁXIMO Y PROMEDIO DE PRODUCTOS POR FACTURA")
@@ -101,10 +99,12 @@ products_per_invoice = df.groupBy("InvoiceNo").agg(count("Quantity").alias("Prod
 min_products = products_per_invoice.select(spark_min("ProductCount")).collect()[0][0]
 max_products = products_per_invoice.select(spark_max("ProductCount")).collect()[0][0]
 avg_products = products_per_invoice.select(avg("ProductCount")).collect()[0][0]
-print(f"Mínimo productos por factura: {min_products}")
-print(f"Máximo productos por factura: {max_products}")
-print(f"Promedio productos por factura: {avg_products:.2f}")
-products_per_invoice.coalesce(1).write.csv("resultados/08_productos_por_factura.csv", header=True, mode="overwrite")
+print(f"Mínimo: {min_products}, Máximo: {max_products}, Promedio: {avg_products:.2f}")
+resultados["08_productos_por_factura"] = pd.DataFrame({
+    "Minimo": [min_products],
+    "Maximo": [max_products],
+    "Promedio": [round(float(avg_products), 2)]
+})
 
 print("\n" + "=" * 60)
 print("9. MES DEL AÑO CON MÁS VENTAS")
@@ -117,67 +117,66 @@ monthly_sales = df_with_year.groupBy("Year", "Month").agg(sum("Revenue").alias("
 top_month = monthly_sales.first()
 print(f"Mes con más ventas: {top_month['Month']}/{top_month['Year']}")
 print(f"Ventas: ${top_month['TotalSales']:,.2f}")
-monthly_sales.coalesce(1).write.csv("resultados/09_ventas_por_mes.csv", header=True, mode="overwrite")
+resultados["09_ventas_por_mes"] = pd.DataFrame({
+    "Year": [top_month['Year']],
+    "Month": [top_month['Month']],
+    "TotalSales": [round(float(top_month['TotalSales']), 2)]
+})
 
 print("\n" + "=" * 60)
 print("10. PORCENTAJE DE FACTURAS CON DEVOLUCIONES")
 print("=" * 60)
-total_invoices = df.select("InvoiceNo").distinct().count()
+total_inv = df.select("InvoiceNo").distinct().count()
 invoices_with_returns = df.filter(col("Quantity") < 0).select("InvoiceNo").distinct().count()
-percentage_returns = (invoices_with_returns / total_invoices) * 100
+percentage_returns = (invoices_with_returns / total_inv) * 100
 print(f"Facturas con devoluciones: {invoices_with_returns}")
-print(f"Porcentaje de facturas con devoluciones: {percentage_returns:.2f}%")
-spark.createDataFrame([(total_invoices, invoices_with_returns, percentage_returns)]) \
-    .toDF("TotalFacturas", "FacturasDevolucion", "Porcentaje") \
-    .coalesce(1).write.csv("resultados/10_porcentaje_devoluciones.csv", header=True, mode="overwrite")
+print(f"Porcentaje: {percentage_returns:.2f}%")
+resultados["10_porcentaje_devoluciones"] = pd.DataFrame({
+    "TotalFacturas": [total_inv],
+    "FacturasDevolucion": [invoices_with_returns],
+    "Porcentaje": [round(float(percentage_returns), 2)]
+})
 
 print("\n" + "=" * 60)
-print("OPERACIONES ADICIONALES")
+print("EXPORTANDO RESULTADOS")
 print("=" * 60)
 
-print("\n--- SELECCIÓN DE COLUMNAS ---")
-df.select("InvoiceNo", "Description", "Quantity", "UnitPrice", "Country").show(5)
+import os
+os.makedirs("resultados", exist_ok=True)
 
-print("\n--- FILTRADO DE DATOS ---")
-df.filter(col("Country") == "Germany").show(5)
+for filename, df_result in resultados.items():
+    df_result.to_csv(f"resultados/{filename}.csv", index=False)
+    print(f"Guardado: resultados/{filename}.csv")
 
-print("\n--- ORDENAMIENTO ---")
-df_with_revenue.groupBy("InvoiceNo").agg(round(sum("Revenue"), 2).alias("Total")) \
-    .orderBy(desc("Total")).show(5, truncate=False)
-
-print("\n--- AGRUPACIÓN CON AGG ---")
-df.groupBy("Country").agg(
-    count("InvoiceNo").alias("NumFacturas"),
-    sum("Quantity").alias("CantidadTotal"),
-    round(avg("UnitPrice"), 2).alias("PrecioPromedio")
-).orderBy(desc("NumFacturas")).show(5)
-
-print("\n--- CREACIÓN DE COLUMNAS DERIVADAS ---")
-df_with_category = df.withColumn(
-    "IsReturn", when(col("Quantity") < 0, "Yes").otherwise("No")
-).withColumn(
-    "Revenue", round(col("Quantity") * col("UnitPrice"), 2)
-).withColumn(
-    "CountryUpper", upper(col("Country"))
-)
-df_with_category.select("InvoiceNo", "Description", "Quantity", "IsReturn", "Revenue", "CountryUpper").show(5, truncate=False)
-
-print("\n--- UNIONES (JOINS) ---")
-invoices_df = df.select("InvoiceNo", "Country").distinct()
-revenue_df = df_with_revenue.groupBy("InvoiceNo").agg(round(sum("Revenue"), 2).alias("TotalRevenue"))
-joined_df = invoices_df.join(revenue_df, "InvoiceNo")
-joined_df.show(5, truncate=False)
-
-print("\n--- FUNCIONES DE VENTANA (RANKING) ---")
-customer_ranking = df_with_revenue_clean.groupBy("CustomerID").agg(
-    round(sum("Revenue"), 2).alias("TotalSpent")
-).withColumn(
-    "Rank", row_number().over(Window.orderBy(desc("TotalSpent")))
-).orderBy("Rank")
-customer_ranking.show(10, truncate=False)
-
-print("\n--- EXPORTACIÓN FINAL ---")
-customer_ranking.coalesce(1).write.csv("resultados/ranking_clientes.csv", header=True, mode="overwrite")
+resumen_data = {
+    "Pregunta": [
+        "1. Total Facturas",
+        "2. Clientes Unicos",
+        "3. Ingreso Total",
+        "4. Producto Mas Vendido",
+        "5. Top Cliente",
+        "6. Top 5 Paises sin UK",
+        "7. Ticket Promedio",
+        "8. Productos por Factura",
+        "9. Mes con Mas Ventas",
+        "10. Porcentaje Devoluciones"
+    ],
+    "Resultado": [
+        str(total_invoices),
+        str(unique_customers),
+        f"${total_revenue:,.2f}",
+        f"{top_product['Description']} ({top_product['TotalQuantity']} unidades)",
+        f"Cliente {int(top_customer['CustomerID'])} (${top_customer['TotalSpent']:,.2f})",
+        "Netherlands, EIRE, Germany, France, Australia",
+        f"${avg_invoice:,.2f}",
+        f"Min: {min_products}, Max: {max_products}, Prom: {avg_products:.2f}",
+        f"{top_month['Month']}/{top_month['Year']} (${top_month['TotalSales']:,.2f})",
+        f"{percentage_returns:.2f}%"
+    ]
+}
+df_resumen = pd.DataFrame(resumen_data)
+df_resumen.to_csv("resultados/resumen_general.csv", index=False)
+print("Guardado: resultados/resumen_general.csv")
 
 spark.stop()
 print("\n" + "=" * 60)
