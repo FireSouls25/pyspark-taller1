@@ -11,7 +11,10 @@ import pandas as pd
 spark = SparkSession.builder \
     .appName("OnlineRetailAnalysis") \
     .master("local[*]") \
+    .config("spark.sql.shuffle.partitions", "8") \
     .getOrCreate()
+
+spark.sparkContext.setLogLevel("ERROR")
 
 print("=" * 60)
 print("LECTURA DE DATOS")
@@ -166,11 +169,10 @@ joined_df = invoices_df.join(revenue_df, "InvoiceNo")
 joined_df.show(5)
 
 print("\n--- FUNCIONES DE VENTANA (RANKING) ---")
-window_spec = Window.orderBy(desc("TotalSpent"))
 customer_ranking = df_with_revenue_clean.groupBy("CustomerID").agg(
     sum("Revenue").alias("TotalSpent")
 ).withColumn(
-    "Rank", row_number().over(window_spec)
+    "Rank", row_number().over(Window.orderBy(desc("TotalSpent")))
 ).orderBy("Rank")
 customer_ranking.show(10)
 
